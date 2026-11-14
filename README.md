@@ -25,14 +25,14 @@ Try it in your browser without downloading: https://hex2bkap.github.io/SunsetMar
 
 ## ダウンロード / Download
 
-[**Releases**](../../releases/latest) から `SunsetMarina_v1.0.0.zip`（約 38MB）をダウンロードしてください。
+[**Releases**](../../releases/latest) から `SunsetMarina_v1.0.1.zip`（約 38MB）をダウンロードしてください。
 
 1. zip を右クリック →「すべて展開」（zip の中から直接開くと動きません）
 2. 展開したフォルダの `SunsetMarina.html` をダブルクリック（Edge / Chrome 推奨）
 
 別ファイル `marina_ambience_wave_120min.mp3`（約 143MB）は、2 時間の波音です。プレーヤーでリピート再生して作業用 BGM などにお使いください。
 
-Download `SunsetMarina_v1.0.0.zip` (about 38 MB) from [Releases](../../releases/latest), extract it, and double-click `SunsetMarina.html` (Edge / Chrome recommended).
+Download `SunsetMarina_v1.0.1.zip` (about 38 MB) from [Releases](../../releases/latest), extract it, and double-click `SunsetMarina.html` (Edge / Chrome recommended).
 `marina_ambience_wave_120min.mp3` (about 143 MB) is a separate 2-hour wave-sound file.
 
 ## 操作 / Controls
@@ -49,6 +49,9 @@ Download `SunsetMarina_v1.0.0.zip` (about 38 MB) from [Releases](../../releases/
 
 WebGL2 が動く GPU を積んだ PC。GTX 1660 Ti クラスで、標準画質・フル HD で滑らかに動きます。
 Microsoft Edge / Google Chrome の最新版。Firefox など他のブラウザは動作未確認です。
+
+スマホ：iPhone 11（Safari）で、デモが動くのを確かめています。長く見ると端末が少し熱くなります。
+Phones: the demo has been tested on an iPhone 11 (Safari). It may get warm during long viewing.
 
 ## 利用条件 / Terms
 

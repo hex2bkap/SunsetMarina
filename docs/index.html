@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>夕日マリーナ</title>
-<!-- 視聴版。_dev/tools/build_view.py が src/ を結合して作る生成物（手で直さない）。版：設計図 p1-0.8 #8ad24218／src #a645c5e3 -->
+<!-- 視聴版。_dev/tools/build_view.py が src/ を結合して作る生成物（手で直さない）。版：設計図 p1-0.8 #8ad24218／src #f6739016 -->
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   #cv { display: block; width: 100vw; height: 100vh; height: 100dvh; }
@@ -59058,6 +59058,56 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
+// ===== src/core/gpu.js =====
+// GPU の機能の違いを吸収する（2026-11-14・iPhone で色が壊れた件）。
+//   この場面は、空の明るさの表・海の地図・夜の灯りの地図を 32bit の浮動小数で持ち、なめらかに（LinearFilter で）読む。
+//   iPhone などには 32bit の浮動小数をなめらかに読む機能（OES_texture_float_linear）が無く、表が全部 0 に読まれた
+//   → 空が真っ黒 → 露出が上限まで上がる → 白〜赤一色に飛んだ。
+//   その機能が無い端末だけ 16bit の浮動小数（WebGL2 では必ずなめらかに読める）に切り替える。機能がある PC は今までと同じ作りを通る。
+//   16bit の浮動小数にも描けない端末（ごく古い物）は表示できないので、入口で案内の文を出す（gpuDetect が投げる）。
+
+const GPU = { floatLinear: true, half: false };
+
+/** 描き始める前に1回呼ぶ（createApp の中）。16bit の浮動小数へも描けないときは投げる＝入口の案内の文になる */
+function gpuDetect(renderer) {
+  const ext = renderer.extensions;
+  GPU.floatLinear = ext.has("OES_texture_float_linear");
+  GPU.half = !GPU.floatLinear;
+  if (GPU.half && !ext.has("EXT_color_buffer_float") && !ext.has("EXT_color_buffer_half_float"))
+    throw new Error("この GPU は浮動小数の描画に対応していません（EXT_color_buffer_float）");
+  return GPU;
+}
+
+/** 表を描き込む描画先の型（空の表） */
+const gpuLutType = () => (GPU.half ? THREE.HalfFloatType : THREE.FloatType);
+
+/** なめらかに読む RGBA の浮動小数のデータテクスチャ。data（Float32Array）は呼ぶ側が書き換え、gpuUpload(tex) で GPU へ送る。
+ *  16bit の端末では送るときに変換する（data は 32bit のまま＝計算は今までどおり） */
+function gpuFloatTexture(data, w, h) {
+  const tex = GPU.half
+    ? new THREE.DataTexture(new Uint16Array(data.length), w, h, THREE.RGBAFormat, THREE.HalfFloatType)
+    : new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+  tex.userData.gpuSrc = data;
+  return tex;
+}
+function gpuUpload(tex) {
+  if (GPU.half) {
+    const src = tex.userData.gpuSrc, dst = tex.image.data;
+    for (let i = 0; i < src.length; i++) dst[i] = THREE.DataUtils.toHalfFloat(src[i]);
+  }
+  tex.needsUpdate = true;
+}
+
+/** 描画先の中身を Float32Array に読む（16bit の描画先も RGBA/FLOAT で読める＝WebGL2 の浮動小数の描画先の決まり） */
+function gpuReadFloat(renderer, rt, w, h, out) {
+  if (!GPU.half) { renderer.readRenderTargetPixels(rt, 0, 0, w, h, out); return out; }
+  const gl = renderer.getContext(), prev = renderer.getRenderTarget();
+  renderer.setRenderTarget(rt);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.FLOAT, out);
+  renderer.setRenderTarget(prev);
+  return out;
+}
+
 // ===== src/core/sun.js =====
 // 太陽の位置（NOAA の簡易式）。_dev/tools/sun.py と同じ式＝数値で照合済み（_dev/tools/sun_check.mjs）。
 // three.js に依存しない（node でも動く）。方位は北=0°・東=90°（時計回り）、高度は地平線=0°。
@@ -59575,7 +59625,8 @@ void main() {
 }`;
 
 function lutRT(w, h) {
-  return new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType, format: THREE.RGBAFormat,
+  return new THREE.WebGLRenderTarget(w, h, { type: gpuLutType(), format: THREE.RGBAFormat,   // 32bit をなめらかに読めない端末は 16bit（core/gpu.js）
+   
     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false,
     wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping });
 }
@@ -59626,7 +59677,7 @@ function createSky(renderer, { altKm = 0.0049, mieScale = 2.2 } = {}) {
     update(sunDir) { viewMat.uniforms.uSunDir.value.set(...sunDir); pass(viewMat, viewRT); },
     /** 空の見え方の表を CPU に読み、露出と空の光の計算に使う（時刻が変わったときだけ呼ぶ） */
     readSky(camYawDeg, sunAzDeg, hfovDeg = 66, vTopDeg = 20) {
-      renderer.readRenderTargetPixels(viewRT, 0, 0, SKY_W, SKY_H, readBuf);
+      gpuReadFloat(renderer, viewRT, SKY_W, SKY_H, readBuf);
       const r = ATMO.R + altKm, beta = Math.acos(Math.sqrt(altKm * (2 * ATMO.R + altKm)) / r), zha = Math.PI - beta;
       const zenOf = v => { let c = 1 - 2 * v; c = 1 - c * c; return zha * c; };            // v＝表の縦 0〜0.5（空の側）
       const phiOf = u => Math.acos(Math.max(-1, Math.min(1, -(u * u * 2 - 1))));          // 太陽からの方位差 0〜π
@@ -59804,10 +59855,10 @@ function buildSeaMap(plan) {
     shelter.set(tmp);
   }
   for (let q = 0; q < N * N; q++) data[q * 4] = shelter[q];
-  const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.FloatType);
+  const tex = gpuFloatTexture(data, N, N);   // 32bit をなめらかに読めない端末は 16bit（core/gpu.js）
   tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.needsUpdate = true;
+  gpuUpload(tex);
   return tex;
 }
 
@@ -60314,7 +60365,7 @@ function createNightLights() {
   const N = Math.round(AREA.size / AREA.cell);
   const mkMap = () => {
     const data = new Float32Array(N * N * 4);
-    const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.FloatType);
+    const tex = gpuFloatTexture(data, N, N);   // 32bit をなめらかに読めない端末は 16bit（core/gpu.js）
     tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     return { data, tex };
@@ -60323,7 +60374,7 @@ function createNightLights() {
   const mkLocal = name => {
     const c = LOCAL[name], nx = Math.round(c.w / c.cell), ny = Math.round(c.h / c.cell);
     const data = new Float32Array(nx * ny * 4);
-    const tex = new THREE.DataTexture(data, nx, ny, THREE.RGBAFormat, THREE.FloatType);
+    const tex = gpuFloatTexture(data, nx, ny);
     tex.magFilter = tex.minFilter = THREE.LinearFilter; tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     return { name, c, nx, ny, data, tex, hsum: new Float32Array(nx * ny), wsum: new Float32Array(nx * ny), ver: -1, key: "" };
   };
@@ -60372,7 +60423,7 @@ function createNightLights() {
       }
     }
     for (let q = 0; q < N * N; q++) data[q * 4 + 3] = wsum[q] > 0 ? hsum[q] / wsum[q] : 0;
-    tex.needsUpdate = true;
+    gpuUpload(tex);
   }
 
   // ---- 場所ごとの小さい地図：灯りごとの on を掛けて焼く。on が変わった時（levels 段に量子化）だけ焼き直す
@@ -60398,7 +60449,7 @@ function createNightLights() {
       }
     }
     for (let q = 0; q < nx * ny; q++) data[q * 4 + 3] = wsum[q] > 0 ? hsum[q] / wsum[q] : 0;
-    tex.needsUpdate = true;
+    gpuUpload(tex);
   }
 
   /** 場面の中の標準の材質に、光の地図を読む差し込みを入れる（入れ済みの材質は飛ばす＝何度呼んでもよい） */
@@ -73700,6 +73751,7 @@ function createApp({ canvas, plan, page = "view", maxFps = 30 }) {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  gpuDetect(renderer);   // 32bit の浮動小数をなめらかに読めない端末（iPhone など）は表を 16bit に（2026-11-14）。描けない端末は投げる＝入口で案内
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 20000);
@@ -74106,8 +74158,8 @@ try {
   msg.style.display = "none";
 } catch (e) {
   console.error(e);
-  fail("この端末・ブラウザでは表示できませんでした（WebGL2 が必要です）。PC の Edge / Chrome でお試しください。<br>" +
-    "This device or browser could not display the scene (WebGL2 is required). Please try Edge / Chrome on a PC.");
+  fail("この端末・ブラウザでは正しく表示できません（WebGL2 と浮動小数の描画が必要です）。PC の Edge / Chrome でご覧ください。<br>" +
+    "This device or browser cannot display the scene correctly (WebGL2 with floating-point rendering is required). Please use Edge / Chrome on a PC.");
 }
 </script>
 </body>
